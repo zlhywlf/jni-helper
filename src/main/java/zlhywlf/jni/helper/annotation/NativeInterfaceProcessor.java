@@ -13,9 +13,12 @@ import javax.lang.model.SourceVersion;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.TypeElement;
+import javax.lang.model.type.TypeMirror;
 import javax.tools.JavaFileObject;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Set;
 
 import static jdk.internal.org.objectweb.asm.Opcodes.*;
@@ -60,11 +63,59 @@ public class NativeInterfaceProcessor extends AbstractProcessor {
                 throw new RuntimeException(String.format("注解 @NativeInterface 只用于接口! [%s] 类型是 [%s]", inter, inter.getKind()));
             }
             ClassWriter classWriter = new ClassWriter(ClassWriter.COMPUTE_FRAMES);
+            StringBuilder classInfoBuilder = new StringBuilder("{");
+            StringBuilder methodsInfoBuilder = new StringBuilder("\"methods\": [");
             processingInfo(inter);
-            generateClass(classWriter);
+            processingMethods(classWriter, inter, methodsInfoBuilder);
+            methodsInfoBuilder.append("]");
+            classInfoBuilder.append(methodsInfoBuilder);
+            classInfoBuilder.append(",\"clazz\": \"");
+            classInfoBuilder.append(clsAsmName);
+            classInfoBuilder.append("\"}");
+            generateClass(classWriter, classInfoBuilder);
             writeClass(classWriter);
         });
         return true;
+    }
+
+    private void processingMethods(ClassWriter classWriter, Element inter, StringBuilder methodsInfoBuilder) {
+        List<? extends Element> methods = inter.getEnclosedElements();
+        for (int i = 0; i < methods.size(); i++) {
+            Element interMethod = methods.get(i);
+            TypeMirror asType = interMethod.asType();
+            if (asType instanceof com.sun.tools.javac.code.Type.MethodType m) {
+                // 处理方法描述
+                StringBuilder builder = new StringBuilder("(");
+                List<com.sun.tools.javac.code.Type> typeArguments = m.getParameterTypes();
+                typeArguments.forEach(t -> builder.append(transJavacTypeToAsmType(t).getDescriptor()));
+                builder.append(")");
+                builder.append(transJavacTypeToAsmType(m.getReturnType()));
+                // 处理异常
+                List<com.sun.tools.javac.code.Type> thrownTypes = m.getThrownTypes();
+                String[] exceptions = new String[thrownTypes.size()];
+                for (int j = 0; j < exceptions.length; j++) {
+                    exceptions[j] = transJavacTypeToAsmType(thrownTypes.get(j)).getInternalName();
+                }
+                String name = interMethod.getSimpleName().toString();
+                String des = builder.toString();
+                methodsInfoBuilder.append("{");
+                methodsInfoBuilder.append("\"id\":\"");
+                methodsInfoBuilder.append(i);
+                methodsInfoBuilder.append("\",");
+                methodsInfoBuilder.append("\"name\":\"");
+                methodsInfoBuilder.append(name);
+                methodsInfoBuilder.append("\",");
+                methodsInfoBuilder.append("\"des\":\"");
+                methodsInfoBuilder.append(des);
+                methodsInfoBuilder.append("\"");
+                methodsInfoBuilder.append("}");
+                if (i < methods.size() - 1) {
+                    methodsInfoBuilder.append(",");
+                }
+                // 生成方法
+                classWriter.visitMethod(ACC_PUBLIC | ACC_NATIVE, name, des, null, exceptions).visitEnd();
+            }
+        }
     }
 
     /**
@@ -92,18 +143,16 @@ public class NativeInterfaceProcessor extends AbstractProcessor {
      *
      * @param classWriter ClassWriter
      */
-    private void generateClass(ClassWriter classWriter) {
+    private void generateClass(ClassWriter classWriter, StringBuilder classInfoBuilder) {
         classWriter.visit(V11, ACC_PUBLIC | ACC_SUPER, clsAsmName, null, "java/lang/Object", new String[]{interAsmName});
         generateDefaultConstructor(classWriter);
-        generateStaticBlock(classWriter);
-
+        generateStaticBlock(classWriter, classInfoBuilder);
         // 添加注解
         AnnotationVisitor av;
         for (String annotation : clsAnnotations) {
             av = classWriter.visitAnnotation(transJavacTypeToAsmType(annotation).getDescriptor(), true);
             av.visitEnd();
         }
-
         classWriter.visitEnd();
     }
 
@@ -127,16 +176,19 @@ public class NativeInterfaceProcessor extends AbstractProcessor {
      *
      * @param classWriter ClassWriter
      */
-    private void generateStaticBlock(ClassWriter classWriter) {
+    private void generateStaticBlock(ClassWriter classWriter, StringBuilder classInfoBuilder) {
         MethodVisitor mv = classWriter.visitMethod(ACC_STATIC, "<clinit>", "()V", null, null);
         mv.visitCode();
-        mv.visitLdcInsn("clsAsmName");
-        mv.visitLdcInsn(clsAsmName);
+        // 类名
+        mv.visitLdcInsn("jni.config");
+        mv.visitLdcInsn(classInfoBuilder.toString());
         mv.visitMethodInsn(INVOKESTATIC, "java/lang/System", "setProperty", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", false);
         mv.visitInsn(POP);
+        // 加载动态库
         mv.visitLdcInsn(libName);
         mv.visitMethodInsn(INVOKESTATIC, "java/lang/System", "loadLibrary", "(Ljava/lang/String;)V", false);
-        mv.visitLdcInsn("clsAsmName");
+        // 清理
+        mv.visitLdcInsn("jni.config");
         mv.visitMethodInsn(INVOKESTATIC, "java/lang/System", "clearProperty", "(Ljava/lang/String;)Ljava/lang/String;", false);
         mv.visitInsn(POP);
         mv.visitInsn(RETURN);
