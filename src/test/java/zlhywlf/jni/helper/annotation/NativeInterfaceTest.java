@@ -2,9 +2,11 @@ package zlhywlf.jni.helper.annotation;
 
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+import zlhywlf.jni.helper.core.Constant;
 
 import javax.tools.ToolProvider;
 import java.io.IOException;
+import java.lang.reflect.InvocationTargetException;
 
 /**
  * @author zlhywlf (tommietanghao@zlhywlf.onmicrosoft.com)
@@ -12,9 +14,12 @@ import java.io.IOException;
 public class NativeInterfaceTest {
 
     @Test
-    void compileTest() {
-        int ret = ToolProvider.getSystemJavaCompiler().run(null, null, null, new String[]{"-d", "target/test-classes", "src/test/java/zlhywlf/jni/helper/annotation/NativeInterfaceTest.java"});
+    void compileTest() throws ClassNotFoundException, NoSuchMethodException, InvocationTargetException, InstantiationException, IllegalAccessException {
+        int ret = ToolProvider.getSystemJavaCompiler().run(null, null, null, "-d", "target/test-classes", "src/test/java/zlhywlf/jni/helper/annotation/NativeInterfaceTest.java");
         Assertions.assertEquals(0, ret);
+        Class<?> clazz = Class.forName(Example.class.getName() + Constant.CLS_SUFFIX);
+        Object o = clazz.getConstructor().newInstance();
+        Assertions.assertTrue(o instanceof Example);
     }
 
 }
